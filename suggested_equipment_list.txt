@@ -1,0 +1,23 @@
+ROBOT MALZEME LİSTESİ
+• Raspberry Pi (4 / 5 / en kötü 3)
+→ Ana bilgisayar; görüntü işleme ve karar verme
+• ESP32 (tercih) / Arduino
+→ Motor ve sensörlerin gerçek zamanlı kontrolü
+• Kamera (Pi Camera / USB Camera / son tercih olarak ESP32-CAM)
+→ Şerit ve trafik işareti algılama
+• Ultrasonik Sensör (HC-SR04)
+→ Basit mesafe ölçümü (duvar takibi)
+• ToF Sensör (VL53L0X)
+→ Daha hassas ve hızlı mesafe ölçümü (tercih edilir)
+• IMU (MPU6050)
+→ Açısal hareket ve yön bilgisi (denge/dönüş kontrolü)
+• DC Motor (2 adet)
+→ Aracı ileri/geri hareket ettirme
+• Servo Motor
+→ Direksiyon kontrolü (sağa/sola dönüş)
+• Li-Po Batarya (7.4V / 11.1V)
+→ Yüksek performanslı güç kaynağı
+• Alternatif: Li-ion Pil (3–4 adet)
+→ Li-Po yoksa güç kaynağı alternatifi
+• Motor Sürücü (L298N)
+→ DC motorların hız ve yön kontrolü
