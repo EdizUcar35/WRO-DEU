@@ -8,43 +8,43 @@ from picamera2 import Picamera2
 import cv2
 import numpy as np
 import time
+import serial
 
 
+SERIAL_ENABLED = True
+SERIAL_PORT = "/dev/serial0"
+SERIAL_BAUD_RATE = 115200
+SERIAL_TIMEOUT = 1
+SERIAL_WRITE_TIMEOUT = 1
+SERIAL_SEND_INTERVAL = 0.2
+SERIAL_LINE_ENDING = "\n"
 
-
-
-
-camera = Picamera2()
-
-camera_config = camera.create_preview_configuration(
-    main={"size": (320, 240), "format": "RGB888"}
-)
-
-camera.configure(camera_config)
-camera.start()
-
-time.sleep(1)
-
-
-
-
-
-# detection settings
 FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
+
+CAMERA_FORMAT = "RGB888"
+CAMERA_WARMUP_SECONDS = 1
 
 MIN_CONTOUR_AREA = 250
 CENTER_DEAD_ZONE = 35
 
-
-# only the lower-middle part of the image is used to reduce false detections from background objects
 ROI_TOP_RATIO = 0.25
 ROI_BOTTOM_RATIO = 0.95
 ROI_LEFT_RATIO = 0.10
 ROI_RIGHT_RATIO = 0.90
 
+LOOP_DELAY_SECONDS = 0.2
 
+DEFAULT_OBSTACLE_COLOR = "none"
+DEFAULT_OBSTACLE_POSITION = "none"
+DEFAULT_STEERING_COMMAND = "go_straight"
+DEFAULT_SPEED_COMMAND = "normal_speed"
 
+RED_STEERING_COMMAND = "steer_left"
+GREEN_STEERING_COMMAND = "steer_right"
+OBSTACLE_SPEED_COMMAND = "slow_down"
+
+SERIAL_COMMAND_TEMPLATE = "{steering_command},{speed_command},{obstacle_color},{obstacle_position},{obstacle_area},{obstacle_center_x},{obstacle_center_y}"
 
 COLOR_RANGES = {
     "red": [
@@ -57,19 +57,47 @@ COLOR_RANGES = {
 }
 
 
+camera = Picamera2()
 
-# utility functions
+camera_config = camera.create_preview_configuration(
+    main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": CAMERA_FORMAT}
+)
+
+camera.configure(camera_config)
+camera.start()
+
+time.sleep(CAMERA_WARMUP_SECONDS)
+
+
+def create_serial_connection():
+    if not SERIAL_ENABLED:
+        return None
+
+    try:
+        connection = serial.Serial(
+            port=SERIAL_PORT,
+            baudrate=SERIAL_BAUD_RATE,
+            timeout=SERIAL_TIMEOUT,
+            write_timeout=SERIAL_WRITE_TIMEOUT
+        )
+
+        time.sleep(2)
+        return connection
+
+    except serial.SerialException as error:
+        print(f"Serial connection error: {error}")
+        return None
+
+
+serial_connection = create_serial_connection()
+
 
 def correct_camera_frame(frame):
-
-
     corrected_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     return corrected_frame
 
 
 def get_region_of_interest(frame):
-
-
     height, width, _ = frame.shape
 
     start_y = int(height * ROI_TOP_RATIO)
@@ -83,8 +111,6 @@ def get_region_of_interest(frame):
 
 
 def create_color_mask(hsv_frame, hsv_ranges):
-
-
     total_mask = None
 
     for lower_bound, upper_bound in hsv_ranges:
@@ -107,8 +133,6 @@ def create_color_mask(hsv_frame, hsv_ranges):
 
 
 def find_largest_obstacle(mask, color_name, offset_x, offset_y):
-
-
     contours, _ = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
@@ -144,10 +168,6 @@ def find_largest_obstacle(mask, color_name, offset_x, offset_y):
 
 
 def detect_obstacles(frame):
-    """
-    detects red and green colors, returns a list of detected obstacles
-    """
-
     corrected_frame = correct_camera_frame(frame)
 
     roi_frame, offset_x, offset_y = get_region_of_interest(corrected_frame)
@@ -173,10 +193,6 @@ def detect_obstacles(frame):
 
 
 def choose_primary_obstacle(obstacles):
-    """
-    the obstacle with largest visible are is selected if more than one obstacle is visible
-    """
-
     if not obstacles:
         return None
 
@@ -186,10 +202,6 @@ def choose_primary_obstacle(obstacles):
 
 
 def calculate_obstacle_position(obstacle):
-    """
-    determines whether the obstacle is on the left,center or right side
-    """
-
     frame_center_x = FRAME_WIDTH // 2
     obstacle_center_x = obstacle["center_x"]
 
@@ -203,48 +215,78 @@ def calculate_obstacle_position(obstacle):
 
 
 def generate_driving_decision(obstacle):
-    """
-    Converts detected obstacle color into a driving decision.
-    """
-
     if obstacle is None:
         return {
-            "obstacle_color": "none",
-            "obstacle_position": "none",
-            "steering_command": "go_straight",
-            "speed_command": "normal_speed"
+            "obstacle_color": DEFAULT_OBSTACLE_COLOR,
+            "obstacle_position": DEFAULT_OBSTACLE_POSITION,
+            "steering_command": DEFAULT_STEERING_COMMAND,
+            "speed_command": DEFAULT_SPEED_COMMAND,
+            "obstacle_area": 0,
+            "obstacle_center_x": 0,
+            "obstacle_center_y": 0
         }
 
     obstacle_color = obstacle["color"]
     obstacle_position = calculate_obstacle_position(obstacle)
 
     if obstacle_color == "red":
-        steering_command = "steer_left"
-        speed_command = "slow_down"
+        steering_command = RED_STEERING_COMMAND
+        speed_command = OBSTACLE_SPEED_COMMAND
 
     elif obstacle_color == "green":
-        steering_command = "steer_right"
-        speed_command = "slow_down"
+        steering_command = GREEN_STEERING_COMMAND
+        speed_command = OBSTACLE_SPEED_COMMAND
 
     else:
-        steering_command = "go_straight"
-        speed_command = "normal_speed"
+        steering_command = DEFAULT_STEERING_COMMAND
+        speed_command = DEFAULT_SPEED_COMMAND
 
     decision = {
         "obstacle_color": obstacle_color,
         "obstacle_position": obstacle_position,
         "steering_command": steering_command,
-        "speed_command": speed_command
+        "speed_command": speed_command,
+        "obstacle_area": int(obstacle["area"]),
+        "obstacle_center_x": obstacle["center_x"],
+        "obstacle_center_y": obstacle["center_y"]
     }
 
     return decision
 
 
-def print_detection_result(obstacles, primary_obstacle, decision):
-    """
-    Prints obstacle detection and driving decision data to the terminal.
-    """
+def create_serial_message(decision):
+    message = SERIAL_COMMAND_TEMPLATE.format(
+        steering_command=decision["steering_command"],
+        speed_command=decision["speed_command"],
+        obstacle_color=decision["obstacle_color"],
+        obstacle_position=decision["obstacle_position"],
+        obstacle_area=decision["obstacle_area"],
+        obstacle_center_x=decision["obstacle_center_x"],
+        obstacle_center_y=decision["obstacle_center_y"]
+    )
 
+    return message + SERIAL_LINE_ENDING
+
+
+def send_decision_to_serial(connection, decision):
+    if connection is None:
+        return False
+
+    if not connection.is_open:
+        return False
+
+    message = create_serial_message(decision)
+
+    try:
+        connection.write(message.encode("utf-8"))
+        return True
+
+    except serial.SerialException as error:
+        print(f"Serial write error: {error}")
+        return False
+
+
+def print_detection_result(obstacles, primary_obstacle, decision, serial_sent):
     print("\033c", end="")
     print("WRO Color Based Obstacle Detection")
     print("----------------------------------")
@@ -278,11 +320,20 @@ def print_detection_result(obstacles, primary_obstacle, decision):
     print(f"Obstacle position: {decision['obstacle_position']}")
     print(f"Steering command: {decision['steering_command']}")
     print(f"Speed command: {decision['speed_command']}")
+    print(f"Obstacle area: {decision['obstacle_area']}")
+    print(f"Obstacle center x: {decision['obstacle_center_x']}")
+    print(f"Obstacle center y: {decision['obstacle_center_y']}")
+    print("----------------------------------")
+    print(f"Serial enabled: {SERIAL_ENABLED}")
+    print(f"Serial port: {SERIAL_PORT}")
+    print(f"Serial baud rate: {SERIAL_BAUD_RATE}")
+    print(f"Serial sent: {serial_sent}")
+    print(f"Serial message: {create_serial_message(decision).strip()}")
 
 
-
-#main loop
 try:
+    last_serial_send_time = 0
+
     while True:
         frame = camera.capture_array()
 
@@ -292,13 +343,26 @@ try:
 
         decision = generate_driving_decision(primary_obstacle)
 
-        print_detection_result(obstacles, primary_obstacle, decision)
+        current_time = time.time()
 
-        time.sleep(0.2)
+        serial_sent = False
+
+        if current_time - last_serial_send_time >= SERIAL_SEND_INTERVAL:
+            serial_sent = send_decision_to_serial(serial_connection, decision)
+            last_serial_send_time = current_time
+
+        print_detection_result(obstacles, primary_obstacle, decision, serial_sent)
+
+        time.sleep(LOOP_DELAY_SECONDS)
 
 except KeyboardInterrupt:
     print("\nProgram stopped by user.")
 
 finally:
     camera.stop()
+
+    if serial_connection is not None and serial_connection.is_open:
+        serial_connection.close()
+
     print("Camera stopped.")
+    print("Serial connection closed.")
