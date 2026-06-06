@@ -57,6 +57,7 @@ COLOR_RANGES = {
 }
 
 
+# start camera with fixed lightweight settings.
 camera = Picamera2()
 
 camera_config = camera.create_preview_configuration(
@@ -70,6 +71,7 @@ time.sleep(CAMERA_WARMUP_SECONDS)
 
 
 def create_serial_connection():
+    # skip serial when disabled from config.
     if not SERIAL_ENABLED:
         return None
 
@@ -93,11 +95,13 @@ serial_connection = create_serial_connection()
 
 
 def correct_camera_frame(frame):
+    # convert frame to expected channel order.
     corrected_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     return corrected_frame
 
 
 def get_region_of_interest(frame):
+    # crop to the driving-relevant window.
     height, width, _ = frame.shape
 
     start_y = int(height * ROI_TOP_RATIO)
@@ -111,6 +115,7 @@ def get_region_of_interest(frame):
 
 
 def create_color_mask(hsv_frame, hsv_ranges):
+    # merge all hsv ranges for one color.
     total_mask = None
 
     for lower_bound, upper_bound in hsv_ranges:
@@ -126,6 +131,7 @@ def create_color_mask(hsv_frame, hsv_ranges):
 
     kernel = np.ones((5, 5), np.uint8)
 
+    # clean small noise and fill tiny gaps.
     total_mask = cv2.morphologyEx(total_mask, cv2.MORPH_OPEN, kernel)
     total_mask = cv2.morphologyEx(total_mask, cv2.MORPH_CLOSE, kernel)
 
@@ -133,6 +139,7 @@ def create_color_mask(hsv_frame, hsv_ranges):
 
 
 def find_largest_obstacle(mask, color_name, offset_x, offset_y):
+    # pick the strongest valid contour.
     contours, _ = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
@@ -168,6 +175,7 @@ def find_largest_obstacle(mask, color_name, offset_x, offset_y):
 
 
 def detect_obstacles(frame):
+    # run full detection pipeline on one frame.
     corrected_frame = correct_camera_frame(frame)
 
     roi_frame, offset_x, offset_y = get_region_of_interest(corrected_frame)
@@ -193,6 +201,7 @@ def detect_obstacles(frame):
 
 
 def choose_primary_obstacle(obstacles):
+    # prioritize the closest-looking target by area.
     if not obstacles:
         return None
 
@@ -202,6 +211,7 @@ def choose_primary_obstacle(obstacles):
 
 
 def calculate_obstacle_position(obstacle):
+    # map obstacle center to left/center/right.
     frame_center_x = FRAME_WIDTH // 2
     obstacle_center_x = obstacle["center_x"]
 
@@ -215,6 +225,7 @@ def calculate_obstacle_position(obstacle):
 
 
 def generate_driving_decision(obstacle):
+    # build safe defaults when nothing is detected.
     if obstacle is None:
         return {
             "obstacle_color": DEFAULT_OBSTACLE_COLOR,
@@ -229,6 +240,7 @@ def generate_driving_decision(obstacle):
     obstacle_color = obstacle["color"]
     obstacle_position = calculate_obstacle_position(obstacle)
 
+    # map color to steering behavior.
     if obstacle_color == "red":
         steering_command = RED_STEERING_COMMAND
         speed_command = OBSTACLE_SPEED_COMMAND
@@ -255,6 +267,7 @@ def generate_driving_decision(obstacle):
 
 
 def create_serial_message(decision):
+    # format one csv packet for vehicle.cpp.
     message = SERIAL_COMMAND_TEMPLATE.format(
         steering_command=decision["steering_command"],
         speed_command=decision["speed_command"],
@@ -269,6 +282,7 @@ def create_serial_message(decision):
 
 
 def send_decision_to_serial(connection, decision):
+    # send decision only when serial is ready.
     if connection is None:
         return False
 
@@ -287,6 +301,7 @@ def send_decision_to_serial(connection, decision):
 
 
 def print_detection_result(obstacles, primary_obstacle, decision, serial_sent):
+    # print one compact debug frame.
     print("\033c", end="")
     print("WRO Color Based Obstacle Detection")
     print("----------------------------------")
@@ -332,9 +347,11 @@ def print_detection_result(obstacles, primary_obstacle, decision, serial_sent):
 
 
 try:
+    # throttle serial sending independent of loop delay.
     last_serial_send_time = 0
 
     while True:
+        # capture frame and compute latest decision.
         frame = camera.capture_array()
 
         obstacles = detect_obstacles(frame)
@@ -347,6 +364,7 @@ try:
 
         serial_sent = False
 
+        # send at a fixed interval to avoid serial flooding.
         if current_time - last_serial_send_time >= SERIAL_SEND_INTERVAL:
             serial_sent = send_decision_to_serial(serial_connection, decision)
             last_serial_send_time = current_time
@@ -359,6 +377,7 @@ except KeyboardInterrupt:
     print("\nProgram stopped by user.")
 
 finally:
+    # close camera and serial cleanly.
     camera.stop()
 
     if serial_connection is not None and serial_connection.is_open:
