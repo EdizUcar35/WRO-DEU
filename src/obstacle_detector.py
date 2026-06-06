@@ -1,3 +1,9 @@
+"""
+Copyright (c) 2026 Team CENGOT
+
+Licensed under the MIT License. See the top-level LICENSE file for details.
+"""
+
 from picamera2 import Picamera2
 import cv2
 import numpy as np

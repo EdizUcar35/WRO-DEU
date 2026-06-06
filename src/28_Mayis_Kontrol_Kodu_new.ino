@@ -1,3 +1,12 @@
+#if 1
+/*
+  Copyright (c) 2026 Team CENGOT
+
+  Licensed under the MIT License. See the repository top-level LICENSE file
+  for the full text.
+*/
+#endif
+
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
